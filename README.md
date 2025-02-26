@@ -1,5 +1,3 @@
-﻿# UTELMS-cheat_V3
-
 # PYTHON IS TRASH 🚮🐍
 
 ## About  
