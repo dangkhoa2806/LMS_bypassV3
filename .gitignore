@@ -1,0 +1,18 @@
+# Ignore virtual environment
+venv/
+.venv/
+.env
+Cheat_V3/
+.Cheat_V3
+# Ignore Python compiled files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore IDE settings
+.vscode/
+.idea/
+
+Cheat_V3/
+.Cheat_V3
+secret_config.py
