@@ -15,7 +15,7 @@ print("Copy content using Ctrl + C. Press Ctrl + Alt + V to stop and concatenate
 logged_content = []
 
 executor = ThreadPoolExecutor(max_workers=2)
- 
+
 def show_response(response_text):
     def _show():
         response_window = tk.Tk()
