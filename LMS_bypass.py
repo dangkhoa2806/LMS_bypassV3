@@ -193,7 +193,7 @@ class App:
                 "If unclear, return 'Uncertain'."
             )
             contents = [prompt, text_input, image_obj]
-            model = "gemini-2.0-flash"
+            model = "gemini-2.0-flash-thinking-exp-01-21"
 
         # Text-only query
         elif text_input:
@@ -340,7 +340,7 @@ class App:
         )
         try:
             response = self.client.models.generate_content(
-                model="gemini-2.0-flash", contents=[prompt, combined_text, image_obj]
+                model="gemini-2.0-flash-thinking-exp-01-21", contents=[prompt, combined_text, image_obj]
             )
             logger.info("Combined query response: %s", response.text)
             self.show_message(response.text)
