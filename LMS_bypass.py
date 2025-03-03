@@ -301,7 +301,7 @@ class App:
 
     def _process_single_image(self, image_obj: Image.Image) -> Optional[str]:
         """Process a single image."""
-        response_text = self._call_api("gemini-2.0-flash", [self.PROMPT_IMAGE_ONLY, image_obj])
+        response_text = self._call_api("gemini-2.0-flash-thinking-exp-01-21", [self.PROMPT_IMAGE_ONLY, image_obj])
         return response_text
 
     def process_combined_query(self) -> None:
