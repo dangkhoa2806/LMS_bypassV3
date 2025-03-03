@@ -1,11 +1,10 @@
 import ctypes
 import os
-import stat
-import shutil
 import threading
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from typing import Optional, List, Set
+import queue
 
 import tkinter as tk
 from PIL import ImageGrab, Image
@@ -21,10 +20,86 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # -----------------------------
+# Message Manager using Tkinter (reused for all messages)
+# -----------------------------
+class MessageManager:
+    def __init__(self):
+        self.msg_queue = queue.Queue()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        self.root = tk.Tk()
+        self.root.withdraw()  # Hide the main window
+        self._check_queue()
+        self.root.mainloop()
+
+    def _check_queue(self):
+        try:
+            while True:
+                msg = self.msg_queue.get_nowait()
+                self._show_message(msg)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._check_queue)
+
+    def _show_message(self, message_text: str):
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        transparent_color = "magenta"
+        win.config(bg=transparent_color)
+        win.attributes("-transparentcolor", transparent_color)
+        
+        # Set the window size
+        window_width, window_height = 300, 100
+        # Set temporary geometry to update internal parameters
+        win.geometry(f"{window_width}x{window_height}+0+0")
+        win.update_idletasks()  # Ensure screen parameters are updated,
+        
+        screen_width = win.winfo_screenwidth()
+        screen_height = win.winfo_screenheight()
+        x = screen_width - window_width - 10
+        y = screen_height - window_height - 10
+        # Reposition the window to the bottom-right corner
+        win.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        
+        label = tk.Label(
+            win,
+            text=message_text,
+            font=("Helvetica", 10),
+            bg=transparent_color,
+            fg="black",
+            wraplength=280,
+            justify="left"
+        )
+        label.pack(expand=True, fill="both")
+        win.after(5000, win.destroy)
+
+    def show_message(self, message_text: str):
+        self.msg_queue.put(message_text)
+
+
+# -----------------------------
 # Application Class
 # -----------------------------
 class App:
-    IMAGE_DIR: str = "img"
+    # Sample prompts for the fucking gemini. Were I had more money, I'd use chatgpt instead
+    PROMPT_TEXT_IMAGE = (
+        "Extract only the correct answer choice from the given multiple-choice question provided as both text and image. "
+        "Output strictly in the format: '[Letter]. [Answer]'. Do not include extra text. "
+        "If unclear, return 'Uncertain'."
+    )
+    PROMPT_TEXT_ONLY = (
+        "Extract only the correct answer choice from the given multiple-choice question. "
+        "Output strictly in the format: '[Letter]. [Answer]'. Do not include explanations or extra text. "
+        "If unclear, return 'Uncertain'."
+    )
+    PROMPT_IMAGE_ONLY = (
+        "Extract only the correct answer choice from the given multiple-choice question in the image. "
+        "Output strictly in the format: '[Letter]. [Answer]'. Do not include explanations. "
+        "If unclear, return 'Uncertain'."
+    )
 
     def __init__(self) -> None:
         load_dotenv()
@@ -33,11 +108,19 @@ class App:
             logger.error("API_KEY is not set in the environment variables!")
             raise ValueError("Missing API_KEY")
         self.client = genai.Client(api_key=api_key)
-        self.executor = ThreadPoolExecutor(max_workers=4)
-        os.makedirs(self.IMAGE_DIR, exist_ok=True)
+        self.executor = ThreadPoolExecutor(max_workers=8)
         self.screenshot_counter: int = 1
-        self.logged_text: List[str] = []         # To store clipboard text
-        self.captured_images: List[str] = []       # To store image file paths
+
+        # Use locks to protect concurrent access
+        self.text_lock = threading.Lock()
+        self.logged_text: List[str] = []
+        self.logged_text_set: Set[str] = set()
+
+        self.image_lock = threading.Lock()
+        self.captured_images: List[Image.Image] = []
+
+        # Initialize MessageManager for displaying messages
+        self.message_manager = MessageManager()
 
     # -----------------------------
     # DPI Awareness
@@ -51,54 +134,18 @@ class App:
             logger.warning("Failed to set DPI awareness: %s", e)
 
     # -----------------------------
-    # File removal helper
-    # -----------------------------
-    @staticmethod
-    def remove_readonly(func, path: str, exc_info) -> None:
-        """Helper to change file permissions if deletion is blocked."""
-        os.chmod(path, stat.S_IWRITE)
-        func(path)
-
-    # -----------------------------
     # Message Display
     # -----------------------------
-    @staticmethod
-    def show_message(message_text: str) -> None:
-        """
-        Display a message in a borderless, always-on-top Tkinter window
-        with a transparent background that auto-closes after 5 seconds.
-        """
-        def _show() -> None:
-            window = tk.Tk()
-            window.overrideredirect(True)
-            window.attributes("-topmost", True)
-            transparent_color = "magenta"
-            window.config(bg=transparent_color)
-            window.attributes("-transparentcolor", transparent_color)
-
-            # Position window in the bottom-right corner
-            screen_width = window.winfo_screenwidth()
-            screen_height = window.winfo_screenheight()
-            window_width, window_height = 300, 100
-            x = screen_width - window_width - 10
-            y = screen_height - window_height - 10
-            window.geometry(f"{window_width}x{window_height}+{x}+{y}")
-
-            label = tk.Label(window, text=message_text, font=("Helvetica", 10),
-                             bg=transparent_color, fg="black", wraplength=280, justify="left")
-            label.pack(expand=True, fill="both")
-            window.after(5000, window.destroy)
-            window.mainloop()
-
-        threading.Thread(target=_show, daemon=True).start()
+    def show_message(self, message_text: str) -> None:
+        self.message_manager.show_message(message_text)
 
     # -----------------------------
     # Input Capture Functions
     # -----------------------------
     def capture_region(self) -> None:
         """
-        Display a translucent full-screen overlay for region selection.
-        Save the selected region as an image in IMAGE_DIR.
+        Display a full-screen overlay that allows selecting a region.
+        After selection, capture the screenshot and save it in memory.
         """
         root = tk.Tk()
         root.attributes('-fullscreen', True)
@@ -131,16 +178,14 @@ class App:
             abs_y2 = root.winfo_rooty() + max(start_y, end_y)
             root.destroy()
 
-            # Capture and save the image
             try:
                 image = ImageGrab.grab(bbox=(abs_x1, abs_y1, abs_x2, abs_y2))
-                filename = os.path.join(self.IMAGE_DIR, f"screenshot_{self.screenshot_counter}.png")
-                image.save(filename)
-                self.captured_images.append(filename)
-                logger.info("Screenshot saved as %s", filename)
+                with self.image_lock:
+                    self.captured_images.append(image)
+                logger.info("Screenshot captured in memory (total: %d)", len(self.captured_images))
                 self.screenshot_counter += 1
             except Exception as e:
-                err_msg = f"Error saving screenshot: {e}"
+                err_msg = f"Error capturing screenshot: {e}"
                 logger.error(err_msg)
                 self.show_message(err_msg)
 
@@ -151,12 +196,36 @@ class App:
 
     def on_copy(self) -> None:
         """
-        Capture clipboard content (triggered by a hotkey) and log it if unique.
+        Retrieve clipboard content when the hotkey is triggered and save it if not already stored.
         """
         content = pyperclip.paste().strip()
-        if content and content not in self.logged_text:
-            self.logged_text.append(content)
-            logger.info("Logged clipboard text: %s", content)
+        if content:
+            with self.text_lock:
+                if content not in self.logged_text_set:
+                    self.logged_text.append(content)
+                    self.logged_text_set.add(content)
+                    logger.info("Logged clipboard text: %s", content)
+
+    # -----------------------------
+    # API Call Helper with Timeout
+    # -----------------------------
+    def _call_api(self, model: str, contents: List) -> Optional[str]:
+        """
+        Execute an API call through the executor and wait for the result with a timeout.
+        """
+        future = self.executor.submit(self.client.models.generate_content, model=model, contents=contents)
+        try:
+            response = future.result(timeout=40)
+            return response.text
+        except TimeoutError:
+            err_msg = "API call timed out!"
+            logger.error(err_msg)
+            self.show_message(err_msg)
+        except Exception as e:
+            err_msg = f"API call error: {e}"
+            logger.error(err_msg)
+            self.show_message(err_msg)
+        return None
 
     # -----------------------------
     # Gemini API Query Functions
@@ -164,231 +233,148 @@ class App:
     def process_api_query(
         self, 
         text_input: Optional[str] = None, 
-        image_input_path: Optional[str] = None
+        image_input: Optional[Image.Image] = None
     ) -> Optional[str]:
         """
-        Process API query based on available inputs:
-         - If both text and image provided: perform a combined query.
-         - If only text is provided: perform text-only query.
-         - If only image is provided: perform image-only query.
+        Process API query based on the inputs:
+          - If both text and image are provided: use the combined query.
+          - If only text is provided: use the text-only query.
+          - If only image is provided: use the image-only query.
         """
-        if not text_input and not image_input_path:
-            msg = "Không có nội dung nào được cung cấp!"
+        if not text_input and not image_input:
+            msg = "No content provided!"
             self.show_message(msg)
             logger.warning(msg)
             return None
 
-        # Combined query: both text and image are provided
-        if text_input and image_input_path:
-            try:
-                image_obj = Image.open(image_input_path)
-            except Exception as e:
-                err_msg = f"Lỗi mở ảnh {image_input_path}: {e}"
-                logger.error(err_msg)
-                self.show_message(err_msg)
-                return None
-            prompt = (
-                "Extract only the correct answer choice from the given multiple-choice question provided as both text and image. "
-                "Output strictly in the format: '[Letter]. [Answer]'. Do not include extra text. "
-                "If unclear, return 'Uncertain'."
-            )
-            contents = [prompt, text_input, image_obj]
+        if text_input and image_input:
+            contents = [self.PROMPT_TEXT_IMAGE, text_input, image_input]
             model = "gemini-2.0-flash-thinking-exp-01-21"
-
-        # Text-only query
         elif text_input:
-            prompt = (
-                "Extract only the correct answer choice from the given multiple-choice question. "
-                "Output strictly in the format: '[Letter]. [Answer]'. Do not include explanations or extra text. "
-                "If unclear, return 'Uncertain'.\n" + text_input
-            )
-            contents = [prompt]
+            contents = [self.PROMPT_TEXT_ONLY + "\n" + text_input]
             model = "gemini-2.0-flash-thinking-exp-01-21"
-
-        # Image-only query
-        elif image_input_path:
-            try:
-                image_obj = Image.open(image_input_path)
-            except Exception as e:
-                err_msg = f"Lỗi mở ảnh {image_input_path}: {e}"
-                logger.error(err_msg)
-                self.show_message(err_msg)
-                return None
-            prompt = (
-                "Extract only the correct answer choice from the given multiple-choice question in the image. "
-                "Output strictly in the format: '[Letter]. [Answer]'. Do not include explanations. "
-                "If unclear, return 'Uncertain'."
-            )
-            contents = [prompt, image_obj]
+        elif image_input:
+            contents = [self.PROMPT_IMAGE_ONLY, image_input]
             model = "gemini-2.0-flash"
 
-        try:
-            response = self.client.models.generate_content(model=model, contents=contents)
-            logger.info("API Response: %s", response.text)
-            self.show_message(response.text)
-            # Delete the image file after processing (if applicable)
-            if image_input_path:
-                try:
-                    os.remove(image_input_path)
-                    logger.info("Deleted image %s", image_input_path)
-                except Exception as e:
-                    logger.error("Error deleting image %s: %s", image_input_path, e)
-            return response.text
-        except Exception as e:
-            err_msg = f"Lỗi khi xử lý API query: {e}"
-            logger.error(err_msg)
-            self.show_message(err_msg)
-            return None
+        response_text = self._call_api(model, contents)
+        if response_text:
+            logger.info("API Response: %s", response_text)
+            self.show_message(response_text)
+        return response_text
 
     def process_text_only_query(self) -> None:
-        """Process query using logged clipboard text only."""
-        if not self.logged_text:
-            msg = "No text content available!"
-            self.show_message(msg)
-            logger.warning(msg)
-            return
-        combined_text = " ".join(self.logged_text)
-        self.logged_text.clear()
-        self.process_api_query(text_input=combined_text)
+        """Process query using only the saved clipboard content."""
+        with self.text_lock:
+            if not self.logged_text:
+                msg = "No text content available!"
+                self.show_message(msg)
+                logger.warning(msg)
+                return
+            combined_text = " ".join(self.logged_text)
+            self.logged_text.clear()
+            self.logged_text_set.clear()
+        self.executor.submit(self.process_api_query, text_input=combined_text)
 
     def process_image_only_query(self) -> None:
-        """Process query using all images in the IMAGE_DIR."""
-        image_files = [
-            os.path.join(self.IMAGE_DIR, f)
-            for f in os.listdir(self.IMAGE_DIR)
-            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ]
-        if not image_files:
-            msg = "No images available for processing!"
-            self.show_message(msg)
-            logger.warning(msg)
-            return
+        """Process query using the captured images."""
+        with self.image_lock:
+            if not self.captured_images:
+                msg = "No images available for processing!"
+                self.show_message(msg)
+                logger.warning(msg)
+                return
+            images_to_process = self.captured_images.copy()
+            self.captured_images.clear()
 
-        futures = {self.executor.submit(self._process_single_image, path): path for path in image_files}
+        futures = {self.executor.submit(self._process_single_image, img): img for img in images_to_process}
         for future in as_completed(futures):
-            img_path = futures[future]
             try:
-                response_text = future.result()
+                response_text = future.result(timeout=5)
                 if response_text:
-                    logger.info("Image query response for %s: %s", img_path, response_text)
+                    logger.info("Image query response: %s", response_text)
                     self.show_message(response_text)
             except Exception as e:
-                err_msg = f"Error processing image {img_path}: {e}"
+                err_msg = f"Error processing an image: {e}"
                 logger.error(err_msg)
                 self.show_message(err_msg)
 
-    def _process_single_image(self, img_path: str) -> Optional[str]:
-        """Helper to process a single image and delete it afterwards."""
-        try:
-            image_obj = Image.open(img_path)
-        except Exception as e:
-            err_msg = f"Error opening image {img_path}: {e}"
-            logger.error(err_msg)
-            self.show_message(err_msg)
-            return None
-
-        prompt = (
-            "Extract only the correct answer choice from the given multiple-choice question in the image. "
-            "Output strictly in the format: '[Letter]. [Answer]'. Do not include explanations. "
-            "If unclear, return 'Uncertain'."
-        )
-        try:
-            response = self.client.models.generate_content(model="gemini-2.0-flash", contents=[prompt, image_obj])
-            response_text = response.text
-            try:
-                os.remove(img_path)
-                logger.info("Deleted processed image %s", img_path)
-            except Exception as e:
-                logger.error("Error deleting image %s: %s", img_path, e)
-            return response_text
-        except Exception as e:
-            err_msg = f"Error processing image {img_path}: {e}"
-            logger.error(err_msg)
-            self.show_message(err_msg)
-            return None
+    def _process_single_image(self, image_obj: Image.Image) -> Optional[str]:
+        """Process a single image."""
+        response_text = self._call_api("gemini-2.0-flash", [self.PROMPT_IMAGE_ONLY, image_obj])
+        return response_text
 
     def process_combined_query(self) -> None:
         """
-        Process query using both the logged clipboard text and the most recently captured image.
+        Process query using both the saved clipboard content and the recently captured image.
         """
-        if not self.logged_text:
-            msg = "No text content available for combined query!"
-            self.show_message(msg)
-            logger.warning(msg)
-            return
-        if not self.captured_images:
-            msg = "No captured images available for combined query!"
-            self.show_message(msg)
-            logger.warning(msg)
-            return
+        with self.text_lock:
+            if not self.logged_text:
+                msg = "No text content available for combined query!"
+                self.show_message(msg)
+                logger.warning(msg)
+                return
+            combined_text = " ".join(self.logged_text)
+            self.logged_text.clear()
+            self.logged_text_set.clear()
+        with self.image_lock:
+            if not self.captured_images:
+                msg = "No captured images available for combined query!"
+                self.show_message(msg)
+                logger.warning(msg)
+                return
+            image_obj = self.captured_images.pop()
 
-        combined_text = " ".join(self.logged_text)
-        self.logged_text.clear()
-        image_path = self.captured_images.pop()
-        try:
-            image_obj = Image.open(image_path)
-        except Exception as e:
-            err_msg = f"Error opening image {image_path}: {e}"
-            logger.error(err_msg)
-            self.show_message(err_msg)
-            return
-
-        prompt = (
-            "Extract only the correct answer choice from the given multiple-choice question provided as both text and image. "
-            "Output strictly in the format: '[Letter]. [Answer]'. Do not include extra text. "
-            "If unclear, return 'Uncertain'."
-        )
-        try:
-            response = self.client.models.generate_content(
-                model="gemini-2.0-flash-thinking-exp-01-21", contents=[prompt, combined_text, image_obj]
-            )
-            logger.info("Combined query response: %s", response.text)
-            self.show_message(response.text)
-            try:
-                os.remove(image_path)
-                logger.info("Deleted processed image %s", image_path)
-            except Exception as e:
-                logger.error("Error deleting image %s: %s", image_path, e)
-        except Exception as e:
-            err_msg = f"Error processing combined query: {e}"
-            logger.error(err_msg)
-            self.show_message(err_msg)
+        response_text = self._call_api("gemini-2.0-flash-thinking-exp-01-21", [self.PROMPT_TEXT_IMAGE, combined_text, image_obj])
+        if response_text:
+            logger.info("Combined query response: %s", response_text)
+            self.show_message(response_text)
 
     # -----------------------------
     # Hotkey Registration & Main Loop
     # -----------------------------
     def register_hotkeys(self) -> None:
         """
-        Register hotkeys for functionalities:
-          - Ctrl+Alt+Shift+C: Capture region
-          - Ctrl+Alt+C: Log clipboard text
-          - Ctrl+Alt+V: Process API query (text-only or combined)
-          - (Optionally) Ctrl+Alt+I: Process image-only query
-          - (Optionally) Ctrl+Alt+B: Process combined text and image query
+        Register hotkeys:
+         - Ctrl+Alt+Shift+C: Capture screen region
+         - Ctrl+Alt+C: Save clipboard content
+         - Ctrl+Alt+V: Process API query (text-only or combined)
         """
         keyboard.add_hotkey('ctrl+alt+shift+c', self.capture_region)
         keyboard.add_hotkey('ctrl+alt+c', self.on_copy)
-        keyboard.add_hotkey('ctrl+alt+v', lambda: self.process_api_query(
-            text_input=" ".join(self.logged_text) if self.logged_text else None,
-            image_input_path=self.captured_images.pop() if self.captured_images else None
-        ))
+
+        def process_current_query():
+            with self.text_lock:
+                text = " ".join(self.logged_text) if self.logged_text else None
+                self.logged_text.clear()
+                self.logged_text_set.clear()
+            with self.image_lock:
+                image = self.captured_images.pop() if self.captured_images else None
+            self.process_api_query(text_input=text, image_input=image)
+
+        keyboard.add_hotkey('ctrl+alt+v', lambda: self.executor.submit(process_current_query))
 
     def run(self) -> None:
-        """Initialize DPI awareness, register hotkeys, and wait for events."""
+        """Initialize DPI awareness, register hotkeys and wait for events."""
         self.setup_dpi_awareness()
         self.register_hotkeys()
         logger.info("Hotkeys registered:")
         logger.info("  Ctrl+Alt+Shift+C: Capture region")
         logger.info("  Ctrl+Alt+C: Log clipboard text")
         logger.info("  Ctrl+Alt+V: Process API query")
-        keyboard.wait()
-
+        try:
+            keyboard.wait()
+        except KeyboardInterrupt:
+            logger.info("Exiting...")
+        finally:
+            self.executor.shutdown(wait=False)
 
 # -----------------------------
 # Entry Point
 # -----------------------------
 if __name__ == "__main__":
     try:
+        App.setup_dpi_awareness()
         app = App()
         app.run()
     except Exception as e:
