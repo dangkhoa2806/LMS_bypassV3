@@ -255,7 +255,7 @@ class App:
             model = "gemini-2.0-flash-thinking-exp-01-21"
         elif image_input:
             contents = [self.PROMPT_IMAGE_ONLY, image_input]
-            model = "gemini-2.0-flash"
+            model = "gemini-2.0-flash-thinking-exp-01-21"
 
         response_text = self._call_api(model, contents)
         if response_text:
