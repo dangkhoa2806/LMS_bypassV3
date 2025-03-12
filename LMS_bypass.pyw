@@ -86,35 +86,30 @@ class MessageManager:
 class App:
     # Sample prompts for the fucking gemini. Were I had more money, I'd use chatgpt instead
     PROMPT_TEXT_IMAGE = (
-        "You are an AI assistant specializing in multiple-choice question analysis. "
-        "Your task is to extract the correct answer choice from a given multiple-choice question, "
-        "presented as both text and an image. "
-        "You must follow a strict reasoning process, verifying information across multiple reliable sources "
-        "or performing necessary calculations before providing an answer. "
-        "Only return an answer when it is 100% certain based on evidence. "
-        "If there is any uncertainty, return 'Uncertain'. "
-        "Format your response strictly as '[Letter]. [Answer]'. "
-        "Do not include explanations, additional text, or any variations in formatting."
+    "You are an AI assistant specializing in multiple-choice question analysis. "
+    "Your task is to extract the correct answer from a multiple-choice question presented in both text and image formats. "
+    "You must follow a strict reasoning process by verifying information from multiple reliable sources or performing necessary calculations. "
+    "Only respond when you are 100% certain of the answer. "
+    "If the input does not include answer choices, use calculations, reasoning, and verification to determine the final answer. "
+    "Return only the answer without any explanations or additional text, strictly formatted as '[Letter]. [Answer]' if answer choices exist, or as just the final answer if they do not."
     )
 
     PROMPT_TEXT_ONLY = (
-        "You are an AI assistant trained for precise multiple-choice question analysis. "
-        "You must verify all information rigorously, ensuring that your answer is bas   ed on logical reasoning, "
-        "cross-referenced sources, or accurate calculations. "
-        "If the correct answer is ambiguous or cannot be determined with certainty, return 'Uncertain'. "
-        "Format your response strictly as '[Letter]. [Answer]'. "
-        "Do not include explanations, reasoning, or any additional content."
+    "You are an AI assistant trained for precise multiple-choice question analysis. "
+    "You must verify all information through logical reasoning, reliable sources, or accurate calculations. "
+    "If the question does not provide answer choices, use calculations, reasoning, and verification to determine the final answer. "
+    "If the correct answer is ambiguous or cannot be determined with certainty, return 'Uncertain'. "
+    "Return only the answer without any explanations or additional content, strictly formatted as '[Letter]. [Answer]' if answer choices exist, or as just the final answer if they do not."
     )
 
     PROMPT_IMAGE_ONLY = (
-        "You are an AI assistant specializing in analyzing visual content. "
-        "Your task is to extract only the correct answer choice from a multiple-choice question in an image. "
-        "Your response must be based on careful analysis, logical deduction, "
-        "and verification from multiple sources or calculations when necessary. "
-        "If the correct answer cannot be determined with certainty, return 'Uncertain'. "
-        "Format your response strictly as '[Letter]. [Answer]'. "
-        "Do not include explanations, interpretations, or additional text."
-    )
+    "You are an AI assistant specializing in visual content analysis. "
+    "Your task is to extract the correct answer from a multiple-choice question presented in an image format. "
+    "Based on careful analysis, logical deduction, and verification from multiple sources or necessary calculations, only respond when you are 100% certain of the answer. "
+    "If the image does not provide answer choices, use reasoning and calculations to determine the final answer. "
+    "If the correct answer cannot be determined with certainty, return 'Uncertain'. "
+    "Return only the answer without any explanations or additional text, strictly formatted as '[Letter]. [Answer]' if answer choices exist, or as just the final answer if they do not."
+)
 
 
 
@@ -266,13 +261,13 @@ class App:
 
         if text_input and image_input:
             contents = [self.PROMPT_TEXT_IMAGE, text_input, image_input]
-            model = "gemini-2.0-flash-thinking-exp-01-21"
+            model = "gemini-2.0-pro-exp-02-05"
         elif text_input:
             contents = [self.PROMPT_TEXT_ONLY + "\n" + text_input]
-            model = "gemini-2.0-flash-thinking-exp-01-21"
+            model = "gemini-2.0-pro-exp-02-05"
         elif image_input:
             contents = [self.PROMPT_IMAGE_ONLY, image_input]
-            model = "gemini-2.0-flash-thinking-exp-01-21"
+            model = "gemini-2.0-pro-exp-02-05"
 
         response_text = self._call_api(model, contents)
         if response_text:
@@ -318,7 +313,7 @@ class App:
 
     def _process_single_image(self, image_obj: Image.Image) -> Optional[str]:
         """Process a single image."""
-        response_text = self._call_api("gemini-2.0-flash-thinking-exp-01-21", [self.PROMPT_IMAGE_ONLY, image_obj])
+        response_text = self._call_api("gemini-2.0-pro-exp-02-05", [self.PROMPT_IMAGE_ONLY, image_obj])
         return response_text
 
     def process_combined_query(self) -> None:
@@ -329,7 +324,7 @@ class App:
             if not self.logged_text:
                 msg = "No text content available for combined query!"
                 self.show_message(msg)
-                logger.warning(msg)
+                logger.warning(msg) # I dunno why it doesn't work...
                 return
             combined_text = " ".join(self.logged_text)
             self.logged_text.clear()
@@ -342,7 +337,7 @@ class App:
                 return
             image_obj = self.captured_images.pop()
 
-        response_text = self._call_api("gemini-2.0-flash-thinking-exp-01-21", [self.PROMPT_TEXT_IMAGE, combined_text, image_obj])
+        response_text = self._call_api("gemini-2.0-pro-exp-02-05", [self.PROMPT_TEXT_IMAGE, combined_text, image_obj])
         if response_text:
             logger.info("Combined query response: %s", response_text)
             self.show_message(response_text)
@@ -395,4 +390,4 @@ if __name__ == "__main__":
         app = App()
         app.run()
     except Exception as e:
-        logger.exception("An unexpected error occurred: %s", e)
+        logger.exception("An unexpected error occurred: %s", e) 
