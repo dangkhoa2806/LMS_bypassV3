@@ -86,26 +86,26 @@ class MessageManager:
 # Application Class
 # -----------------------------
 class App:
-    # Sample prompts for Gemini API
+    # Sample prompts for the stupid Gemini API
     PROMPT_TEXT_IMAGE = (
         "You are an AI assistant specializing in multiple-choice question analysis. "
         "Extract the correct answer based on both text and image inputs. "
         "Return only the final answer in the format '<letter> <answer>' if answer choices exist, or '<answer>' if not. "
-        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know'."
+        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know :)'."
     )
 
     PROMPT_TEXT_ONLY = (    
         "You are an AI assistant trained for precise multiple-choice question analysis. "
         "Determine the correct answer from the text input. "
         "Return only the final answer in the format '<letter> <answer>' if answer choices exist, or '<answer>' if not. "
-        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know'."
+        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know :)'."
     )
 
     PROMPT_IMAGE_ONLY = (
         "You are an AI assistant specializing in visual content analysis. "
         "Analyze the image of a multiple-choice question and extract the correct answer. "
         "Return only the final answer in the format '<letter> <answer>' if answer choices exist, or '<answer>' if not. "
-        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know'."
+        "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know :)'."
     )
 
 
@@ -174,8 +174,10 @@ class App:
             self.api_index = (self.api_index + 1) % len(self.clients)
             return client
 
-    def _call_api(self, model: str, prompt: str) -> Optional[str]:
-        client = self._get_next_client()
+    def _call_api_single(self, client, model: str, prompt: str) -> Optional[str]:
+        """
+        Send a request using a specific API client.
+        """
         contents = [
             types.Content(
                 role="user",
@@ -196,11 +198,8 @@ class App:
                 contents=contents,
                 config=generate_content_config,
             ):
-                # Option 1: Only add if not None
                 if chunk.text is not None:
                     response += chunk.text
-                # Option 2: Alternatively, use the following one-liner:
-                # response += chunk.text or ''
             return response
         except Exception as e:
             err_msg = f"API call error: {e}"
@@ -208,10 +207,17 @@ class App:
             self.show_message(err_msg)
             return None
 
+    # NEW: Single API call using round-robin
+    def _call_api(self, model: str, prompt: str) -> Optional[str]:
+        """
+        Send the API request using a single client selected in round-robin fashion.
+        """
+        client = self._get_next_client()
+        return self._call_api_single(client, model, prompt)
 
-    # -----------------------------
-    # Gemini API Query Functions
-    # -----------------------------
+# -----------------------------
+# Gemini API Query Functions
+# -----------------------------
     def process_api_query(
         self, 
         text_input: Optional[str] = None, 
@@ -219,9 +225,9 @@ class App:
     ) -> Optional[str]:
         """
         Process API query based on the provided inputs:
-          - If both text and image are provided: use the combined query.
-          - If only text is provided: use the text-only prompt.
-          - If only image is provided: use the image-only prompt.
+        - If both text and image are provided: use the combined query.
+        - If only text is provided: use the text-only prompt.
+        - If only image is provided: use the image-only prompt.
         """
         if not text_input and not image_input:
             msg = "No content provided!"
@@ -229,7 +235,7 @@ class App:
             logger.warning(msg)
             return None
 
-        prompt = ""
+        # Build the prompt based on input type
         if text_input and image_input:
             prompt = (
                 self.PROMPT_TEXT_IMAGE + "\n" +
@@ -242,11 +248,13 @@ class App:
             prompt = self.PROMPT_IMAGE_ONLY + "\n" + "IMAGE_DATA: " + self._encode_image(image_input)
 
         model = "gemini-2.0-pro-exp-02-05"
+        # Use the new round-robin API call function
         response_text = self._call_api(model, prompt)
         if response_text:
             logger.info("API Response: %s", response_text)
             self.show_message(response_text)
         return response_text
+
 
     def process_text_only_query(self) -> None:
         """Process query using only the saved clipboard text."""
