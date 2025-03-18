@@ -107,9 +107,7 @@ class App:
         "Return only the final answer in the format '<letter> <answer>' if answer choices exist, or '<answer>' if not. "
         "Do not provide any additional explanation. If you are not 100% certain, return 'I don't know :)'."
     )
-
-
-
+    
     def __init__(self) -> None:
         load_dotenv()
         # Read the 3 API keys from .env
@@ -185,9 +183,9 @@ class App:
             )
         ]
         generate_content_config = types.GenerateContentConfig(
-            temperature=0.25,
-            top_p=0.85,
-            top_k=35,
+            temperature=0.3,
+            top_p=0.87,
+            top_k=40,
             max_output_tokens=8192,
             response_mime_type="text/plain",
         )
@@ -244,7 +242,7 @@ class App:
             )
         elif text_input:
             prompt = self.PROMPT_TEXT_ONLY + "\n" + text_input
-        elif image_input:
+        elif image_input:       
             prompt = self.PROMPT_IMAGE_ONLY + "\n" + "IMAGE_DATA: " + self._encode_image(image_input)
 
         model = "gemini-2.0-pro-exp-02-05"
@@ -254,7 +252,6 @@ class App:
             logger.info("API Response: %s", response_text)
             self.show_message(response_text)
         return response_text
-
 
     def process_text_only_query(self) -> None:
         """Process query using only the saved clipboard text."""
@@ -437,6 +434,7 @@ class App:
 # Entry Point
 # -----------------------------
 if __name__ == "__main__":
+    #The gemini is too stupid to slove the scientific questions.
     try:
         App.setup_dpi_awareness()
         app = App()
