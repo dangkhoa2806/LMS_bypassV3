@@ -56,3 +56,6 @@ if (Test-Path "$installPath\LMS_bypass.pyw") {
 } else {
     Write-Host "LMS_bypass.pyw not found."
 }
+Write-Host "Press Enter to exit..."
+Read-Host
+

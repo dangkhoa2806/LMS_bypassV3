@@ -10,6 +10,7 @@ class Watchdog:
         """
         self.script_name = script_name
         self.process = None
+        self.running = True  # Flag to control the watchdog loop
         self.start_process()
 
     def start_process(self):
@@ -19,7 +20,7 @@ class Watchdog:
         """
         print(f"Starting process {self.script_name}...")
         if os.name == "nt":
-            # Combine flags to create a new process group and hide the console window.
+            # Hide the console window in Windows
             creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             self.process = subprocess.Popen(
                 ["python", self.script_name],
@@ -44,32 +45,46 @@ class Watchdog:
         print("Restarting process...")
         self.start_process()
 
-    def hotkey_callback(self):
+    def stop_watchdog(self):
         """
-        Callback function triggered by the hotkey (Ctrl+Shift+Backspace).
+        Completely terminate the monitored process and exit the watchdog.
+        """
+        print("Hotkey Ctrl+Shift+Q pressed. Terminating watchdog and process...")
+        self.running = False
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        keyboard.unhook_all_hotkeys()  # Remove all hotkeys before exiting
+        print("Watchdog stopped.")
+
+    def hotkey_restart(self):
+        """
+        Callback function triggered by Ctrl+Shift+Backspace to restart the process.
         """
         print("Hotkey Ctrl+Shift+Backspace pressed. Restarting process...")
         self.restart_process()
 
     def run(self):
         """
-        Register the hotkey and start monitoring the process.
+        Register the hotkeys and start monitoring the process.
         """
-        # Register the hotkey to trigger process restart
-        keyboard.add_hotkey("ctrl+shift+backspace", self.hotkey_callback)
+        keyboard.add_hotkey("ctrl+shift+backspace", self.hotkey_restart)
+        keyboard.add_hotkey("ctrl+shift+k", self.stop_watchdog)  # New hotkey to stop everything
         print("Watchdog is running. Press Ctrl+Shift+Backspace to restart the process.")
+        print("Press Ctrl+Shift+Q to stop the watchdog completely.")
+
         try:
-            while True:
+            while self.running:
                 # If the process has terminated unexpectedly, restart it.
-                if self.process.poll() is not None:
+                if self.process.poll() is not None and self.running:
                     print("Process exited unexpectedly. Restarting...")
                     self.start_process()
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("Watchdog interrupted. Exiting...")
-            if self.process and self.process.poll() is None:
-                self.process.terminate()
-            keyboard.unhook_all_hotkeys()
+            self.stop_watchdog()
 
 if __name__ == "__main__":
     watchdog = Watchdog("LMS_bypass.pyw")
